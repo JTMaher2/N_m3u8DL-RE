@@ -1,4 +1,4 @@
-﻿using Mp4SubtitleParser;
+using Mp4SubtitleParser;
 using N_m3u8DL_RE.Column;
 using N_m3u8DL_RE.Common.Entity;
 using N_m3u8DL_RE.Common.Enum;
@@ -17,6 +17,7 @@ using System.IO.Pipes;
 using System.Text;
 using System.Threading.Tasks.Dataflow;
 using N_m3u8DL_RE.Enum;
+using System.Text.RegularExpressions;
 
 namespace N_m3u8DL_RE.DownloadManager;
 
@@ -668,29 +669,64 @@ internal class SimpleLiveRecordManager2
                 if (RecordLimitReachedDic[task.Id])
                     return;
 
-                var allHasDatetime = streamSpec.Playlist!.MediaParts[0].MediaSegments.All(s => s.DateTime != null);
-                if (!SamePathDic.ContainsKey(task.Id))
-                {
-                    var allName = streamSpec.Playlist!.MediaParts[0].MediaSegments.Select(s => OtherUtil.GetFileNameFromInput(s.Url, false));
-                    var allSamePath = allName.Count() > 1 && allName.Distinct().Count() == 1;
-                    SamePathDic[task.Id] = allSamePath;
-                }
+                var allHasDatetime = false;
+
+				if (DownloaderConfig.MyOptions.AdKeywords != null)
+				{
+                	allHasDatetime = streamSpec.Playlist!.MediaParts.Count > 0 && streamSpec.Playlist!.MediaParts[0].MediaSegments.All(s => s.DateTime != null);
+                	if (!SamePathDic.ContainsKey(task.Id))
+                	{
+                    	var allName = streamSpec.Playlist!.MediaParts.Count > 0 ? streamSpec.Playlist!.MediaParts[0].MediaSegments.Select(s => OtherUtil.GetFileNameFromInput(s.Url, false)) : null;
+                    	var allSamePath = allName != null && allName.Count() > 1 && allName.Distinct().Count() == 1;
+                    	SamePathDic[task.Id] = allSamePath;
+                	}
+				}
+				else
+				{
+					allHasDatetime = streamSpec.Playlist!.MediaParts[0].MediaSegments.All(s => s.DateTime != null);
+                	if (!SamePathDic.ContainsKey(task.Id))
+                	{
+                    	var allName = streamSpec.Playlist!.MediaParts[0].MediaSegments.Select(s => OtherUtil.GetFileNameFromInput(s.Url, false));
+                    	var allSamePath = allName.Count() > 1 && allName.Distinct().Count() == 1;
+                    	SamePathDic[task.Id] = allSamePath;
+                	}
+				}
                 // 过滤不需要下载的片段
                 FilterMediaSegments(streamSpec, task, allHasDatetime, SamePathDic[task.Id]);
-                var newList = streamSpec.Playlist!.MediaParts[0].MediaSegments;
-                if (newList.Count > 0)
-                {
-                    task.MaxValue += newList.Count;
-                    // 推送给消费者
-                    await BlockDic[task.Id].SendAsync(newList);
-                    // 更新最新链接
-                    LastFileNameDic[task.Id] = GetSegmentName(newList.Last(), allHasDatetime, SamePathDic[task.Id]);
-                    // 尝试更新时间戳
-                    var dt = newList.Last().DateTime;
-                    DateTimeDic[task.Id] = dt != null ? GetUnixTimestamp(dt.Value) : 0L;
-                    // 累加已获取到的时长
-                    RefreshedDurDic[task.Id] += (int)newList.Sum(s => s.Duration);
-                }
+				if (DownloaderConfig.MyOptions.AdKeywords != null)
+				{
+                	var newList = streamSpec.Playlist!.MediaParts.Count > 0 ? streamSpec.Playlist!.MediaParts[0].MediaSegments : null;
+                	if (newList != null && newList.Count > 0)
+                	{
+                    	task.MaxValue += newList.Count;
+                    	// 推送给消费者
+                    	await BlockDic[task.Id].SendAsync(newList);
+                    	// 更新最新链接
+                    	LastFileNameDic[task.Id] = GetSegmentName(newList.Last(), allHasDatetime, SamePathDic[task.Id]);
+                    	// 尝试更新时间戳
+                    	var dt = newList.Last().DateTime;
+                    	DateTimeDic[task.Id] = dt != null ? GetUnixTimestamp(dt.Value) : 0L;
+                    	// 累加已获取到的时长
+                    	RefreshedDurDic[task.Id] += (int)newList.Sum(s => s.Duration);
+                	}
+				}
+				else
+				{
+					var newList = streamSpec.Playlist!.MediaParts[0].MediaSegments;
+                	if (newList.Count > 0)
+                	{
+                    	task.MaxValue += newList.Count;
+                    	// 推送给消费者
+                    	await BlockDic[task.Id].SendAsync(newList);
+                    	// 更新最新链接
+                    	LastFileNameDic[task.Id] = GetSegmentName(newList.Last(), allHasDatetime, SamePathDic[task.Id]);
+                    	// 尝试更新时间戳
+                    	var dt = newList.Last().DateTime;
+                    	DateTimeDic[task.Id] = dt != null ? GetUnixTimestamp(dt.Value) : 0L;
+                    	// 累加已获取到的时长
+                    	RefreshedDurDic[task.Id] += (int)newList.Sum(s => s.Duration);
+                	}
+				}
 
                 if (!STOP_FLAG && RefreshedDurDic[task.Id] >= DownloaderConfig.MyOptions.LiveRecordLimit?.TotalSeconds)
                 {
@@ -739,14 +775,31 @@ internal class SimpleLiveRecordManager2
         var lastName = LastFileNameDic[task.Id];
 
         // 优先使用dateTime判断
-        if (dateTime != 0 && streamSpec.Playlist!.MediaParts[0].MediaSegments.All(s => s.DateTime != null)) 
-        {
-            index = streamSpec.Playlist!.MediaParts[0].MediaSegments.FindIndex(s => GetUnixTimestamp(s.DateTime!.Value) == dateTime);
-        }
-        else
-        {
-            index = streamSpec.Playlist!.MediaParts[0].MediaSegments.FindIndex(s => GetSegmentName(s, allHasDatetime, allSamePath) == lastName);
-        }
+		if (DownloaderConfig.MyOptions.AdKeywords != null)
+		{
+        	if (streamSpec.Playlist!.MediaParts.Count > 0)
+        	{
+            	if (dateTime != 0 && streamSpec.Playlist!.MediaParts[0].MediaSegments.All(s => s.DateTime != null)) 
+            	{
+                	index = streamSpec.Playlist!.MediaParts[0].MediaSegments.FindIndex(s => GetUnixTimestamp(s.DateTime!.Value) == dateTime);
+            	}
+            	else
+            	{
+                	index = streamSpec.Playlist!.MediaParts[0].MediaSegments.FindIndex(s => GetSegmentName(s, allHasDatetime, allSamePath) == lastName);
+            	}
+        	}
+		}
+		else
+		{
+			if (dateTime != 0 && streamSpec.Playlist!.MediaParts[0].MediaSegments.All(s => s.DateTime != null)) 
+        	{
+            	index = streamSpec.Playlist!.MediaParts[0].MediaSegments.FindIndex(s => GetUnixTimestamp(s.DateTime!.Value) == dateTime);
+        	}
+        	else
+        	{
+            	index = streamSpec.Playlist!.MediaParts[0].MediaSegments.FindIndex(s => GetSegmentName(s, allHasDatetime, allSamePath) == lastName);
+        	}
+		}
 
         if (index > -1)
         {
@@ -768,6 +821,37 @@ internal class SimpleLiveRecordManager2
             }
             streamSpec.Playlist!.MediaParts[0].MediaSegments = list;
         }
+
+        if (DownloaderConfig.MyOptions.AdKeywords != null)
+        {
+            var regList = DownloaderConfig.MyOptions.AdKeywords.Select(s => new Regex(s)).ToList();
+
+            if (streamSpec.Playlist != null)
+            {
+                var countBefore = streamSpec.SegmentsCount;
+
+                foreach (var part in streamSpec.Playlist.MediaParts)
+                {
+                    // 没有找到广告分片
+                    if (part.MediaSegments.All(x => regList.All(reg => !reg.IsMatch(x.Url))))
+                    {
+                        continue;
+                    }
+                    // 找到广告分片 清理
+                    part.MediaSegments = part.MediaSegments.Where(x => regList.All(reg => !reg.IsMatch(x.Url))).ToList();
+                }
+
+                // 清理已经为空的 part
+                streamSpec.Playlist.MediaParts = streamSpec.Playlist.MediaParts.Where(x => x.MediaSegments.Count > 0).ToList();
+
+                var countAfter = streamSpec.SegmentsCount;
+
+                if (countBefore != countAfter)
+                {
+                    Logger.WarnMarkUp("[grey]{} segments => {} segments[/]", countBefore, countAfter);
+                }
+            }
+        }
     }
 
     public async Task<bool> StartRecordAsync()
@@ -780,7 +864,16 @@ internal class SimpleLiveRecordManager2
         // 设置等待时间
         if (WAIT_SEC == 0)
         {
-            WAIT_SEC = (int)(SelectedSteams.Min(s => s.Playlist!.MediaParts[0].MediaSegments.Sum(s => s.Duration)) / 2);
+            if (DownloaderConfig.MyOptions.AdKeywords != null)
+            {
+				// it's possible that there are no media parts, in which case we put 60 secs as default wait time
+                WAIT_SEC = (int)(SelectedSteams.Min(s => s.Playlist!.MediaParts.Count > 0 ? s.Playlist!.MediaParts[0].MediaSegments.Sum(s => s.Duration) : 60) / 2);
+            }
+			else
+			{
+				// if there are no ad keywords, there will always be at least 1 media part
+				WAIT_SEC = (int)(SelectedSteams.Min(s => s.Playlist!.MediaParts[0].MediaSegments.Sum(s => s.Duration)) / 2);
+			}
             WAIT_SEC -= 2; // 再提前两秒吧 留出冗余
             if (DownloaderConfig.MyOptions.LiveWaitTime != null)
                 WAIT_SEC = DownloaderConfig.MyOptions.LiveWaitTime.Value;
@@ -837,8 +930,15 @@ internal class SimpleLiveRecordManager2
                 DateTimeDic[task.Id] = 0L;
                 RecordedDurDic[task.Id] = 0;
                 RefreshedDurDic[task.Id] = 0;
-                MaxIndexDic[task.Id] = item.Playlist?.MediaParts[0].MediaSegments.LastOrDefault()?.Index ?? 0L; // 最大Index
-                BlockDic[task.Id] = new BufferBlock<List<MediaSegment>>();
+				if (DownloaderConfig.MyOptions.AdKeywords != null)
+				{
+                	MaxIndexDic[task.Id] = (item.Playlist?.MediaParts.Count > 0 ? item.Playlist?.MediaParts[0].MediaSegments.LastOrDefault()?.Index : null) ?? 0L; // 最大Index
+                }
+				else
+				{
+					MaxIndexDic[task.Id] = item.Playlist?.MediaParts[0].MediaSegments.LastOrDefault()?.Index ?? 0L; // 最大Index
+				}
+				BlockDic[task.Id] = new BufferBlock<List<MediaSegment>>();
                 return (item, task);
             }).ToDictionary(item => item.item, item => item.task);
 
